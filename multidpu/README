@@ -1,5 +1,8 @@
 PetaLinux User Module Template
 ===================================
+per aggiungere questo driver come modulo in un progetto petalinux crea un modulo con il comando:
+petalinux-create -t modules -n multidpu  --enable
+e poi copia il contenuto di questa cartella nella cartella creata da petalinux "nome_progetto"/project-spec/meta-user/recepies-modules/multidpu
 
 This directory contains a PetaLinux kernel module created from a template.
 
