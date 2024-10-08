@@ -14,68 +14,139 @@
 # the License.
 #
 
-set(CMAKE_CXX_STANDARD 17)
-set(CMAKE_CXX_STANDARD_REQUIRED ON)
-get_filename_component(COMPONENT_NAME "${CMAKE_CURRENT_SOURCE_DIR}" NAME)
-set(CMAKE_MODULE_PATH "${CMAKE_MODULE_PATH};${PROJECT_SOURCE_DIR}/cmake")
+cmake_minimum_required(VERSION 3.5)
+project(vaitrace VERSION 3.5.20231)
+set(VAITRACE_DEST_PATH bin/xlnx/${PROJECT_NAME})
+set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Wall -Werror")
+set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -Wall -Werror")
 
-add_library(${COMPONENT_NAME} include/vitis/ai/common.hpp
-include/vitis/ai/event.hpp
-include/vitis/ai/fmt.hpp
-include/vitis/ai/payload.hpp
-include/vitis/ai/ringbuf.hpp
-include/vitis/ai/trace.hpp
-include/vitis/ai/traceclass.hpp
-include/vitis/ai/vaitrace_dbg.hpp
-src/event.cpp
-src/internal.hpp
-src/pid.h
-src/str.cpp
-src/str.hpp
-src/subgraph.cpp
-src/time.cpp
-src/time.hpp
-src/traceclass.cpp
-src/trace.cpp
-src/trace_py.cpp
-src/util.cpp
-src/util.hpp
-)
+# Generate Version Flags
+execute_process(COMMAND date +%F-%T OUTPUT_VARIABLE VAITRACE_BUILD_DATE)
+string(STRIP "${VAITRACE_BUILD_DATE}" VAITRACE_BUILD_DATE)
+execute_process(
+  WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
+  COMMAND git rev-parse --short HEAD
+  OUTPUT_VARIABLE VAITRACE_GIT_VERSION)
+string(STRIP "${VAITRACE_GIT_VERSION}" VAITRACE_GIT_VERSION)
+configure_file(vaitrace_version.in
+               ${CMAKE_CURRENT_BINARY_DIR}/vaitrace_version.py)
 
-add_library(${PROJECT_NAME}::${COMPONENT_NAME} ALIAS ${COMPONENT_NAME})
+install(PROGRAMS ${CMAKE_CURRENT_BINARY_DIR}/vaitrace_version.py
+        DESTINATION ${VAITRACE_DEST_PATH})
 
-set_target_properties(${COMPONENT_NAME} PROPERTIES
-    VERSION "${PROJECT_VERSION}"
-    SOVERSION "${PROJECT_VERSION_MAJOR}"
-    OUTPUT_NAME ${PROJECT_NAME}-${COMPONENT_NAME}
-    CXX_STANDARD 17)
+# Build noc Library
+if(${CMAKE_SYSTEM_PROCESSOR} MATCHES "aarch64")
+  set(NOC_DIR ${CMAKE_CURRENT_SOURCE_DIR}/vaitraceTools/mem_perf)
+  include_directories(${NOC_DIR}/mem_mon_base/include)
+  include_directories(${NOC_DIR}/noc/ddrmc/include)
+  include_directories(${NOC_DIR}/xapm/include)
 
-target_link_libraries(${COMPONENT_NAME} PRIVATE ${CMAKE_THREAD_LIBS_INIT} xir::xir util)
-if (XRT_FOUND AND ENABLE_DPU_RUNNER)
-    target_link_libraries(${COMPONENT_NAME} PRIVATE ${CMAKE_THREAD_LIBS_INIT} XRT::xrt_core XRT::xrt_coreutil)
-    target_compile_definitions(${COMPONENT_NAME} PRIVATE ENABLE_XRT_TIMESTAMP)
+  add_library(memperf SHARED ${NOC_DIR}/noc/ddrmc/noc_ddrmc.cpp ${NOC_DIR}/xapm/apm.cpp 
+	  ${NOC_DIR}/mem_interface/mem_perf_interface.cpp)
+
+  set_target_properties(memperf PROPERTIES VERSION "${PROJECT_VERSION}"
+                                           SOVERSION "${PROJECT_VERSION_MAJOR}")
+
+  install(TARGETS memperf DESTINATION lib)
 endif()
 
-target_include_directories(${COMPONENT_NAME} PUBLIC
-    $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
-    $<INSTALL_INTERFACE:include> PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
+# Build nmu Library
+if(${CMAKE_SYSTEM_PROCESSOR} MATCHES "aarch64")
+  set(NOC_DIR ${CMAKE_CURRENT_SOURCE_DIR}/vaitraceTools/mem_perf)
+  include_directories(${NOC_DIR}/mem_mon_base/include)
+  include_directories(${NOC_DIR}/noc/nmu/include)
 
-install(TARGETS ${COMPONENT_NAME} EXPORT ${COMPONENT_NAME}-targets COMPONENT trace ARCHIVE DESTINATION lib  RUNTIME DESTINATION bin LIBRARY DESTINATION lib)
-install(EXPORT ${COMPONENT_NAME}-targets NAMESPACE ${PROJECT_NAME}:: COMPONENT trace DESTINATION share/cmake/${PROJECT_NAME})
+  add_library(nmuperf SHARED ${NOC_DIR}/noc/nmu/noc_nmu.cpp ${NOC_DIR}/mem_interface/nmu_perf_interface.cpp)
+
+  set_target_properties(nmuperf PROPERTIES VERSION "${PROJECT_VERSION}"
+                                           SOVERSION "${PROJECT_VERSION_MAJOR}")
+
+  install(TARGETS nmuperf DESTINATION lib)
+endif()
+
+# Build powermon Library
+if(${CMAKE_SYSTEM_PROCESSOR} MATCHES "aarch64")
+  set(POWERMON_DIR ${CMAKE_CURRENT_SOURCE_DIR}/vaitraceTools/powermon)
+  include_directories(${POWERMON_DIR}/include)
+
+  add_library(powermon SHARED ${POWERMON_DIR}/power_mon.cpp)
+
+  set_target_properties(
+    powermon PROPERTIES VERSION "${PROJECT_VERSION}" SOVERSION
+                                                     "${PROJECT_VERSION_MAJOR}")
+
+  install(TARGETS powermon DESTINATION lib)
+endif()
+# Build DpuMcParser Library
+if(${CMAKE_SYSTEM_PROCESSOR} MATCHES "aarch64")
+  set(DPU_MC_PATH writer/parser/dpu_mc_parser)
+  set(DPU_MC_SRC ${CMAKE_CURRENT_SOURCE_DIR}/${DPU_MC_PATH})
+  set(DPU_MC_DEST ${VAITRACE_DEST_PATH}/${DPU_MC_PATH})
+  include_directories(${DPU_MC_SRC})
+  include_directories(${DPU_MC_SRC}/inc)
+  aux_source_directory(${DPU_MC_SRC} DPU_MC_SRC_FILES)
+  foreach(SRC IN ITEMS ${DPU_MC_SRC_FILES})
+    get_filename_component(_N ${SRC} NAME_WE)
+    add_library(${_N} SHARED ${SRC})
+    # set_target_properties(${_N} PROPERTIES VERSION "${PROJECT_VERSION}"
+    # SOVERSION "${PROJECT_VERSION_MAJOR}")
+    install(
+      FILES ${CMAKE_CURRENT_BINARY_DIR}/lib${_N}.so
+      DESTINATION ${DPU_MC_DEST}
+      RENAME ${_N}.so)
+  endforeach()
+endif()
 
 install(
-  DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/include/vitis/ai/
-  DESTINATION include/vart/trace
-  COMPONENT trace
+  DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/
+  DESTINATION ${VAITRACE_DEST_PATH}
   FILES_MATCHING
-  PATTERN "*.hpp"
-  PATTERN "*.h"
-  )
+  PATTERN "*.py"
+  PATTERN __pycache__ EXCLUDE
+  PATTERN ".*" EXCLUDE
+  PATTERN script EXCLUDE
+  PATTERN test_cfg EXCLUDE
+  PATTERN time_sync EXCLUDE
+  PATTERN build EXCLUDE
+  PATTERN vaitrace_py EXCLUDE
+  PATTERN vaitraceTools/mem_perf EXCLUDE
+  PATTERN vaitraceTools/powermon EXCLUDE
+  PATTERN vaitrace.py PERMISSIONS WORLD_EXECUTE WORLD_READ GROUP_EXECUTE
+                                  GROUP_READ OWNER_EXECUTE OWNER_READ)
 
+# Create Symbol Link
+if(NOT MSVC)
+  # MSVC does not support symlink properly.
+  execute_process(
+    COMMAND
+      ${CMAKE_COMMAND} -E create_symlink ./xlnx/${PROJECT_NAME}/vaitrace.py
+      ${CMAKE_CURRENT_BINARY_DIR}/vaitrace)
+  install(PROGRAMS ${CMAKE_CURRENT_BINARY_DIR}/vaitrace DESTINATION bin)
+endif(NOT MSVC)
+
+# Build Python
 if(BUILD_PYTHON)
-  add_subdirectory(vaitrace)
-endif(BUILD_PYTHON)
-
-if (BUILD_TEST)
-#
+  if(MSVC)
+    set(VAITRACE_PY_INSTALL_DIR ${PYTHON_SITE_PACKAGES_USER})
+  else(MSVC)
+    if(INSTALL_HOME)
+      set(VAITRACE_PY_INSTALL_DIR ${PYTHON_SITE_PACKAGES_USER})
+    else(INSTALL_HOME)
+      set(VAITRACE_PY_INSTALL_DIR ${PYTHON_SITE_PACKAGES})
+    endif(INSTALL_HOME)
+  endif(MSVC)
+  install(
+    DIRECTORY python/vaitrace_py
+    DESTINATION ${VAITRACE_PY_INSTALL_DIR}
+    FILES_MATCHING
+    PATTERN "*.py")
 endif()
+
+set(CPACK_PACKAGE_NAME "vaitrace")
+set(CPACK_PACKAGE_VENDOR "Humanity")
+set(CPACK_SET_DESTDIR OFF)
+set(CPACK_PACKAGE_CONTACT "devops@amd.com")
+set(CPACK_PACKAGE_VERSION ${PROJECT_VERSION})
+set(CPACK_RPM_FILE_NAME RPM-DEFAULT)
+set(CPACK_RPM_PACKAGE_ARCHITECTURE ${CMAKE_SYSTEM_PROCESSOR})
+include(CPack)
